@@ -3,6 +3,8 @@
 #if (defined(USE_LR2021) || defined(ARCH_PORTDUINO)) && RADIOLIB_EXCLUDE_LR2021 != 1
 #include "LR20x0Band.h"
 #include "LR20x0Interface.h"
+#include "Throttle.h"
+#include "UptimeClock.h"
 #include "error.h"
 #include "mesh/NodeDB.h"
 
@@ -406,15 +408,30 @@ template <typename T> bool LR20x0Interface<T>::isChannelActive()
                                        .timeout = 0,
                                        .irqFlags = RADIOLIB_IRQ_CAD_DEFAULT_FLAGS,
                                        .irqMask = RADIOLIB_IRQ_CAD_DEFAULT_MASK}};
-    int16_t result;
-
     setStandby();
-    result = lora.scanChannel(cfg);
-    if (result == RADIOLIB_LORA_DETECTED)
-        return true;
+    int16_t result = lora.startChannelScan(cfg);
+    if (result != RADIOLIB_ERR_NONE) {
+        LOG_WARN("LR20x0 channel scan start failed: %d", result);
+        return false;
+    }
 
-    assert(result != RADIOLIB_ERR_WRONG_MODEM);
+    const uint32_t scanStartedMs = Time::getMillis();
+    while (!Throttle::hasElapsed(scanStartedMs, 2000U)) {
+        result = lora.getChannelScanResult();
+        if (result == RADIOLIB_LORA_DETECTED)
+            return true;
+        if (result == RADIOLIB_CHANNEL_FREE)
+            return false;
+        if (result != RADIOLIB_ERR_UNKNOWN) {
+            LOG_WARN("LR20x0 channel scan failed: %d", result);
+            lora.standby();
+            return false;
+        }
+        delay(1);
+    }
 
+    lora.standby();
+    LOG_WARN("LR20x0 channel scan timed out; treating channel as free");
     return false;
 }
 
